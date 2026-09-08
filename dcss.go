@@ -62,17 +62,22 @@ func (d *DcssDescriptor[V]) Dcss() bool {
 }
 
 func (d *DcssDescriptor[V]) Complete() {
-	var decision int32
+	s := d.status.Load()
 
-	decision = FAILED
-	if DcssRead(d.a1) != d.o1 {
-		d.status.Store(decision)
+	if s != UNDECIDED {
 		return
 	}
 
-	decision = SUCCEEDED
+	decision := SUCCEEDED
 
-	if d.status.CompareAndSwap(UNDECIDED, decision) {
+	if DcssRead(d.a1) != d.o1 {
+		decision = FAILED
+	}
+
+	d.status.CompareAndSwap(UNDECIDED, decision)
+	s = d.status.Load()
+
+	if s == SUCCEEDED {
 		d.a2.CompareAndSwap(d.self, d.n2)
 		return
 	}
