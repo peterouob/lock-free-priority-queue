@@ -1,0 +1,50 @@
+# Binaries and build outputs
+/bin/
+/build/
+/dist/
+/out/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go build/test artifacts
+*.cover
+coverage.out
+coverage.html
+*.prof
+*.pprof
+
+# Go workspace/vendor files
+go.work
+go.work.sum
+/vendor/
+
+# Dependency/cache directories
+.cache/
+tmp/
+temp/
+
+# Logs
+*.log
+logs/
+
+# Environment/config secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# IDE/editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
