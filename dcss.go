@@ -4,9 +4,13 @@ import (
 	"sync/atomic"
 )
 
+type descriptor interface {
+	Complete()
+}
+
 type Word[V any] struct {
 	value V
-	desc  *DcssDescriptor[V]
+	desc  descriptor
 }
 
 func priority(w *Word[CMNode]) uint32 {
@@ -92,18 +96,19 @@ func DcssRead[V any](addr *atomic.Pointer[Word[V]]) *Word[V] {
 	}
 }
 
-type CasnDescriptor[T any] struct {
+type CasnDescriptor[V any] struct {
 	n       int
 	status  atomic.Int32
-	entries []atomic.Pointer[entry[T]]
-	self    *Word[T]
+	entries []entry[V]
+	self    *Word[V]
 }
 
-func NewCasnDescriptor[T any](n int) *CasnDescriptor[T] {
-	c := &CasnDescriptor[T]{}
+func NewCasnDescriptor[V any](n int) *CasnDescriptor[V] {
+	c := &CasnDescriptor[V]{}
 	c.status.Store(UNDECIDED)
 	c.n = n
-	c.entries = make([]atomic.Pointer[entry[T]], n)
+	c.entries = make([]entry[V], n)
+	c.self = &Word[V]{desc: c}
 	return c
 }
 
@@ -115,35 +120,40 @@ type entry[V any] struct {
 	n2 *Word[V]
 }
 
-func (cd *CasnDescriptor[T]) Casn() bool {
-	status := cd.status.Load()
-	// phase 1;
-	for i := 0; (i < cd.n) && status == SUCCEEDED; i++ {
-	retry:
-		entry := cd.entries[i].Load()
-		d := NewDcssDescriptor(entry.a1, entry.o1, entry.a2, entry.o2, entry.n2)
-		val := d.Dcss()
+func (cd *CasnDescriptor[V]) Casn() bool {
+	if cd.status.Load() == UNDECIDED {
+		status := SUCCEEDED
+		// phase 1;
+		for i := 0; (i < cd.n) && status == SUCCEEDED; i++ {
+		retry:
+			entry := cd.entries[i]
+			entry.a1.Store(&Word[V]{value: any(status)})
+			entry.o1.value = any(UNDECIDED)
 
-		if val.desc != nil {
-			if val != cd.self {
-				cd.Casn()
-				goto retry
+			d := NewDcssDescriptor(entry.a1, entry.o1, entry.a2, entry.o2, cd.self)
+			val := d.Dcss()
+			if val.desc != nil {
+				if val != cd.self {
+					val.desc.(*CasnDescriptor[V]).Casn()
+					goto retry
+				}
+			} else if val != entry.o2 {
+				status = FAILED
 			}
-		} else if val != entry.o1 {
-			status = FAILED
+			cd.status.CompareAndSwap(UNDECIDED, status)
 		}
-		cd.status.CompareAndSwap(UNDECIDED, status)
 	}
-
 	// phase 2;
 	succeeded := cd.status.Load() == SUCCEEDED
 	for i := 0; i < cd.n; i++ {
-		entry := cd.entries[i].Load()
+		entry := cd.entries[i]
 		if succeeded {
-			entry.a2.CompareAndSwap(cd.self, cd.entries[i].Load().n2)
+			entry.a2.CompareAndSwap(cd.self, cd.entries[i].n2)
 			continue
 		}
-		entry.a2.CompareAndSwap(cd.self, cd.entries[i].Load().o2)
+		entry.a2.CompareAndSwap(cd.self, cd.entries[i].o2)
 	}
 	return succeeded
 }
+
+func (cd *CasnDescriptor[T]) Complete() {}

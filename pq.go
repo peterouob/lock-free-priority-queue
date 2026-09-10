@@ -86,7 +86,7 @@ func (m *MoundTree) Insert(data CDNData) {
 			}
 
 			dcss := NewDcssDescriptor(paddr, P, addr, C, C2)
-			if dcss.Dcss() {
+			if dcss.Dcss() != nil {
 				return
 			}
 		}
