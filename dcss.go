@@ -44,7 +44,7 @@ func NewDcssDescriptor[V any](
 	return d
 }
 
-func (d *DcssDescriptor[V]) Dcss() bool {
+func (d *DcssDescriptor[V]) Dcss() *Word[V] {
 	for {
 		r := d.a2.Load()
 		if r.desc != nil {
@@ -52,11 +52,11 @@ func (d *DcssDescriptor[V]) Dcss() bool {
 			continue
 		}
 		if r != d.o2 {
-			return false
+			return r
 		}
 		if d.a2.CompareAndSwap(d.o2, d.self) {
 			d.Complete()
-			return d.status.Load() == SUCCEEDED
+			return d.o2
 		}
 	}
 }
@@ -90,4 +90,60 @@ func DcssRead[V any](addr *atomic.Pointer[Word[V]]) *Word[V] {
 
 		r.desc.Complete()
 	}
+}
+
+type CasnDescriptor[T any] struct {
+	n       int
+	status  atomic.Int32
+	entries []atomic.Pointer[entry[T]]
+	self    *Word[T]
+}
+
+func NewCasnDescriptor[T any](n int) *CasnDescriptor[T] {
+	c := &CasnDescriptor[T]{}
+	c.status.Store(UNDECIDED)
+	c.n = n
+	c.entries = make([]atomic.Pointer[entry[T]], n)
+	return c
+}
+
+type entry[V any] struct {
+	a1 *atomic.Pointer[Word[V]]
+	o1 *Word[V]
+	a2 *atomic.Pointer[Word[V]]
+	o2 *Word[V]
+	n2 *Word[V]
+}
+
+func (cd *CasnDescriptor[T]) Casn() bool {
+	status := cd.status.Load()
+	// phase 1;
+	for i := 0; (i < cd.n) && status == SUCCEEDED; i++ {
+	retry:
+		entry := cd.entries[i].Load()
+		d := NewDcssDescriptor(entry.a1, entry.o1, entry.a2, entry.o2, entry.n2)
+		val := d.Dcss()
+
+		if val.desc != nil {
+			if val != cd.self {
+				cd.Casn()
+				goto retry
+			}
+		} else if val != entry.o1 {
+			status = FAILED
+		}
+		cd.status.CompareAndSwap(UNDECIDED, status)
+	}
+
+	// phase 2;
+	succeeded := cd.status.Load() == SUCCEEDED
+	for i := 0; i < cd.n; i++ {
+		entry := cd.entries[i].Load()
+		if succeeded {
+			entry.a2.CompareAndSwap(cd.self, cd.entries[i].Load().n2)
+			continue
+		}
+		entry.a2.CompareAndSwap(cd.self, cd.entries[i].Load().o2)
+	}
+	return succeeded
 }
