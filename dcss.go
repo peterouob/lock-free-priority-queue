@@ -1,11 +1,19 @@
 package pq
 
 import (
+	"sort"
 	"sync/atomic"
+	"unsafe"
 )
 
 type descriptor interface {
 	Complete()
+}
+
+type dcssDescriptor interface {
+	descriptor
+
+	dcssDescriptor()
 }
 
 type Word[V any] struct {
@@ -27,32 +35,36 @@ const (
 	FAILED
 )
 
-type DcssDescriptor[V any] struct {
-	a1   *atomic.Pointer[Word[V]]
-	o1   *Word[V]
-	a2   *atomic.Pointer[Word[V]]
-	o2   *Word[V]
-	n2   *Word[V]
+type DcssDescriptor[C, V any] struct {
+	a1 *atomic.Pointer[Word[C]] // control address
+	o1 *Word[C]                 // old value
+
+	a2 *atomic.Pointer[Word[V]] // address
+	o2 *Word[V]                 // expect old value
+	n2 *Word[V]                 // new value
+
 	self *Word[V]
 
 	status atomic.Int32
 }
 
-func NewDcssDescriptor[V any](
-	a1 *atomic.Pointer[Word[V]], o1 *Word[V],
+func NewDcssDescriptor[C, V any](
+	a1 *atomic.Pointer[Word[C]], o1 *Word[C],
 	a2 *atomic.Pointer[Word[V]], o2 *Word[V],
 	n2 *Word[V],
-) *DcssDescriptor[V] {
-	d := &DcssDescriptor[V]{a1: a1, o1: o1, a2: a2, o2: o2, n2: n2}
+) *DcssDescriptor[C, V] {
+	d := &DcssDescriptor[C, V]{a1: a1, o1: o1, a2: a2, o2: o2, n2: n2}
 	d.self = &Word[V]{desc: d}
 	return d
 }
 
-func (d *DcssDescriptor[V]) Dcss() *Word[V] {
+func (d *DcssDescriptor[C, V]) dcssDescriptor() {}
+
+func (d *DcssDescriptor[C, V]) Dcss() *Word[V] {
 	for {
 		r := d.a2.Load()
-		if r.desc != nil {
-			r.desc.Complete()
+		if isDesc, ok := r.desc.(dcssDescriptor); ok {
+			isDesc.Complete()
 			continue
 		}
 		if r != d.o2 {
@@ -65,7 +77,7 @@ func (d *DcssDescriptor[V]) Dcss() *Word[V] {
 	}
 }
 
-func (d *DcssDescriptor[V]) Complete() {
+func (d *DcssDescriptor[C, V]) Complete() {
 	s := d.status.Load()
 
 	if s == UNDECIDED {
@@ -88,72 +100,95 @@ func (d *DcssDescriptor[V]) Complete() {
 func DcssRead[V any](addr *atomic.Pointer[Word[V]]) *Word[V] {
 	for {
 		r := addr.Load()
-		if r.desc == nil {
+		isDesc, ok := r.desc.(dcssDescriptor)
+		if !ok {
 			return r
 		}
 
-		r.desc.Complete()
+		isDesc.Complete()
 	}
 }
 
-type CasnDescriptor[V any] struct {
-	n       int
-	status  atomic.Int32
-	entries []entry[V]
-	self    *Word[V]
+var (
+	CasnUndecided = &Word[int32]{value: UNDECIDED}
+	CasnSucceeded = &Word[int32]{value: SUCCEEDED}
+	CasnFailed    = &Word[int32]{value: FAILED}
+)
+
+type CasnEntry[V any] struct {
+	addr *atomic.Pointer[Word[V]]
+	old  *Word[V]
+	new  *Word[V]
 }
 
-func NewCasnDescriptor[V any](n int) *CasnDescriptor[V] {
-	c := &CasnDescriptor[V]{}
-	c.status.Store(UNDECIDED)
-	c.n = n
-	c.entries = make([]entry[V], n)
+func NewCasnEntry[V any](addr *atomic.Pointer[Word[V]], old, new *Word[V]) CasnEntry[V] {
+	return CasnEntry[V]{addr: addr, old: old, new: new}
+}
+
+type CasnDescriptor[V any] struct {
+	status  atomic.Pointer[Word[int32]]
+	entries []CasnEntry[V]
+
+	self *Word[V]
+}
+
+func NewCasnDescriptor[V any](entries ...CasnEntry[V]) *CasnDescriptor[V] {
+	sort.Slice(entries, func(i, j int) bool {
+		return uintptr(unsafe.Pointer(entries[i].addr)) < uintptr(unsafe.Pointer(entries[j].addr))
+	})
+
+	c := &CasnDescriptor[V]{entries: entries}
+	c.status.Store(CasnUndecided)
 	c.self = &Word[V]{desc: c}
 	return c
 }
 
-type entry[V any] struct {
-	a1 *atomic.Pointer[Word[V]]
-	o1 *Word[V]
-	a2 *atomic.Pointer[Word[V]]
-	o2 *Word[V]
-	n2 *Word[V]
-}
+func (cd *CasnDescriptor[V]) Complete() {}
 
 func (cd *CasnDescriptor[V]) Casn() bool {
-	if cd.status.Load() == UNDECIDED {
-		status := SUCCEEDED
-		// phase 1;
-		for i := 0; (i < cd.n) && status == SUCCEEDED; i++ {
-		retry:
-			entry := cd.entries[i]
-			entry.a1.Store(&Word[V]{value: any(status)})
-			entry.o1.value = any(UNDECIDED)
+	if cd.status.Load() == CasnUndecided {
+		status := CasnSucceeded
 
-			d := NewDcssDescriptor(entry.a1, entry.o1, entry.a2, entry.o2, cd.self)
-			val := d.Dcss()
-			if val.desc != nil {
-				if val != cd.self {
-					val.desc.(*CasnDescriptor[V]).Casn()
+		for i := 0; i < len(cd.entries) && status == CasnSucceeded; i++ {
+		retry:
+			e := cd.entries[i]
+			d := NewDcssDescriptor(&cd.status, CasnUndecided, e.addr, e.old, cd.self)
+
+			switch val := d.Dcss(); {
+			case val == cd.self:
+			case val.desc != nil:
+				if isCasn, ok := val.desc.(*CasnDescriptor[V]); ok {
+					isCasn.Casn()
 					goto retry
 				}
-			} else if val != entry.o2 {
-				status = FAILED
+			case val != e.old:
+				status = CasnFailed
 			}
-			cd.status.CompareAndSwap(UNDECIDED, status)
 		}
+
+		cd.status.CompareAndSwap(CasnUndecided, status)
 	}
-	// phase 2;
-	succeeded := cd.status.Load() == SUCCEEDED
-	for i := 0; i < cd.n; i++ {
-		entry := cd.entries[i]
+
+	succeeded := cd.status.Load() == CasnSucceeded
+	for _, e := range cd.entries {
 		if succeeded {
-			entry.a2.CompareAndSwap(cd.self, cd.entries[i].n2)
+			e.addr.CompareAndSwap(cd.self, e.new)
 			continue
 		}
-		entry.a2.CompareAndSwap(cd.self, cd.entries[i].o2)
+		e.addr.CompareAndSwap(cd.self, e.old)
 	}
+
 	return succeeded
 }
 
-func (cd *CasnDescriptor[T]) Complete() {}
+func CasnRead[V any](addr *atomic.Pointer[Word[V]]) *Word[V] {
+	for {
+		r := DcssRead(addr)
+		isCasn, ok := r.desc.(*CasnDescriptor[V])
+		if !ok {
+			return r
+		}
+
+		isCasn.Casn()
+	}
+}

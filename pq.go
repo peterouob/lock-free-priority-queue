@@ -86,7 +86,7 @@ func (m *MoundTree) Insert(data CDNData) {
 			}
 
 			dcss := NewDcssDescriptor(paddr, P, addr, C, C2)
-			if dcss.Dcss() != nil {
+			if dcss.Dcss() == C {
 				return
 			}
 		}
@@ -110,7 +110,6 @@ func (m *MoundTree) findInsertPoint(v uint32) uint32 {
 func (m *MoundTree) moundify(n uint32) {
 	N := DcssRead(m.nodeAt(n))
 	d := m.depth.Load()
-
 	if !N.value.dirty || (n >= (1<<(d-1)) && n < (1<<d)) {
 		return
 	}

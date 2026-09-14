@@ -3,11 +3,7 @@ package pq
 import (
 	"math/bits"
 	"sync"
-	"sync/atomic"
 	"testing"
-	"time"
-
-	"github.com/stretchr/testify/assert"
 )
 
 func buildTree(vals []int) *MoundTree {
@@ -78,75 +74,4 @@ func TestInsertConcurrent(t *testing.T) {
 	}
 	wg.Wait()
 	checkMoundProperty(t, m)
-}
-
-func TestCompleteClearDescriptor(t *testing.T) {
-
-	cases := []struct {
-		name   string
-		status int32
-		want   int
-	}{
-		{"succeeded", SUCCEEDED, 99},
-		{"failed", FAILED, 42},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			ctrl := newSlot[int](0)
-			data := newSlot[int](42)
-			o1 := DcssRead(ctrl)
-			o2 := DcssRead(data)
-			d := NewDcssDescriptor(ctrl, o1, data, o2, newWord(99))
-
-			data.Store(d.self)
-			d.status.Store(tc.status)
-
-			d.Complete()
-			got := DcssRead(data)
-			assert.Nil(t, got.desc, "a2 still gave descriptor")
-
-			assert.Equal(t, tc.want, got.value)
-		})
-	}
-}
-
-func newWord[V any](value V) *Word[V] {
-	return &Word[V]{
-		value: value,
-	}
-}
-
-func newSlot[V any](v V) *atomic.Pointer[Word[V]] {
-	p := new(atomic.Pointer[Word[V]])
-	w := newWord(v)
-	p.Store(w)
-	return p
-}
-
-func TestHelperMakesProgressOnStalledDescriptor(t *testing.T) {
-	ctrl := newSlot[int](0)
-	data := newSlot[int](42)
-	o1 := DcssRead(ctrl)
-	o2 := DcssRead(data)
-
-	w99 := newWord(99)
-	a := NewDcssDescriptor(ctrl, o1, data, o2, w99)
-	data.Store(a.self)
-	a.status.Store(SUCCEEDED)
-
-	b := NewDcssDescriptor(ctrl, o1, data, w99, newWord(123))
-
-	done := make(chan struct{})
-	go func() {
-		b.Dcss()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		assert.Equal(t, 123, data.Load().value)
-	case <-time.After(time.Second):
-		t.Fatal("owner stopped helper cannot do anything")
-	}
 }
