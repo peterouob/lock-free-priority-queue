@@ -60,7 +60,7 @@ func (m *MoundTree) Insert(data CDNData) {
 	for {
 		c := m.findInsertPoint(v)
 		addr := m.nodeAt(c)
-		C := DcssRead(addr)
+		C := CasnRead(addr)
 
 		if priority(C) < v {
 			continue
@@ -80,7 +80,7 @@ func (m *MoundTree) Insert(data CDNData) {
 			}
 		default:
 			paddr := m.nodeAt(c / 2)
-			P := DcssRead(paddr)
+			P := CasnRead(paddr)
 			if priority(P) > v {
 				continue
 			}
@@ -98,7 +98,7 @@ func (m *MoundTree) findInsertPoint(v uint32) uint32 {
 		d := m.depth.Load()
 		for range maxDepth {
 			leaf := m.randomLeaf()
-			if priority(DcssRead(m.nodeAt(leaf))) >= v {
+			if priority(CasnRead(m.nodeAt(leaf))) >= v {
 				return m.binarySearch(leaf, v)
 			}
 		}
@@ -111,7 +111,7 @@ func (m *MoundTree) findInsertPoint(v uint32) uint32 {
 func (m *MoundTree) ExtractMin() CDNData {
 	for {
 		tree := m.nodeAt(1)
-		R := tree.Load()
+		R := CasnRead(tree)
 
 		if R.value.dirty {
 			m.moundify(1)
@@ -131,7 +131,6 @@ func (m *MoundTree) ExtractMin() CDNData {
 
 		if tree.CompareAndSwap(R, newR) {
 			retval := R.value.list.value
-			R.value.list = nil
 			m.moundify(1)
 			return retval
 		}
@@ -139,70 +138,85 @@ func (m *MoundTree) ExtractMin() CDNData {
 }
 
 func (m *MoundTree) moundify(n uint32) {
-	N := CasnRead(m.nodeAt(n))
-	d := m.depth.Load()
-	if !N.value.dirty || (n >= (1<<(d-1)) && n < (1<<d)) {
-		return
-	}
+	for {
+		N := CasnRead(m.nodeAt(n))
 
-	l := DcssRead(m.nodeAt(n * 2))
-	r := DcssRead(m.nodeAt(n*2 + 1))
+		if !N.value.dirty {
+			return
+		}
 
-	if !l.value.dirty || !r.value.dirty {
-		return
-	}
+		d := m.depth.Load()
 
-	m.moundify(2 * n)
-	m.moundify(2*n + 1)
+		if n >= (1 << (d - 1)) {
+			newN := &Word[CMNode]{value: CMNode{list: N.value.list, dirty: false}}
+			if m.nodeAt(n).CompareAndSwap(N, newN) {
+				return
+			}
+			continue
+		}
 
-	if priority(l) <= priority(r) && priority(l) <= priority(N) {
-		L := CasnRead(m.nodeAt(2 * n))
+		l := CasnRead(m.nodeAt(n * 2))
 
-		newN := Word[CMNode]{value: CMNode{
-			list:  L.value.list,
-			dirty: false,
-		}}
+		if l.value.dirty {
+			m.moundify(2 * n)
+			continue
+		}
 
-		newL := Word[CMNode]{value: CMNode{
-			list:  N.value.list,
-			dirty: true,
-		}}
+		r := CasnRead(m.nodeAt(n*2 + 1))
 
-		casn := NewCasnDescriptor(NewCasnEntry(m.nodeAt(n), N, &newN),
-			NewCasnEntry(m.nodeAt(2*n), L, &newL))
-		casn.Casn()
+		if r.value.dirty {
+			m.moundify(2*n + 1)
+			continue
+		}
 
-		m.moundify(2 * n)
-		return
-	} else if priority(r) < priority(l) && priority(r) < priority(N) {
-		R := CasnRead(m.nodeAt(2*n + 1))
+		switch {
+		case priority(l) <= priority(r) && priority(l) <= priority(N):
+			newN := Word[CMNode]{value: CMNode{
+				list:  l.value.list,
+				dirty: false,
+			}}
 
-		newN := Word[CMNode]{value: CMNode{
-			list:  R.value.list,
-			dirty: false,
-		}}
+			newL := Word[CMNode]{value: CMNode{
+				list:  N.value.list,
+				dirty: true,
+			}}
 
-		newR := Word[CMNode]{value: CMNode{
-			list:  N.value.list,
-			dirty: true,
-		}}
+			casn := NewCasnDescriptor(NewCasnEntry(m.nodeAt(n), N, &newN),
+				NewCasnEntry(m.nodeAt(n*2), l, &newL))
 
-		casn := NewCasnDescriptor(NewCasnEntry(m.nodeAt(n), N, &newN),
-			NewCasnEntry(m.nodeAt(2*n+1), R, &newR))
-		casn.Casn()
+			if casn.Casn() {
+				n = 2 * n
+				continue
+			}
+		case priority(r) < priority(l) && priority(r) < priority(N):
+			newN := Word[CMNode]{value: CMNode{
+				list:  r.value.list,
+				dirty: false,
+			}}
 
-		m.moundify(2*n + 1)
-		return
-	}
+			newR := Word[CMNode]{value: CMNode{
+				list:  N.value.list,
+				dirty: true,
+			}}
 
-	newN := Word[CMNode]{value: CMNode{
-		list:  N.value.list,
-		dirty: false,
-	}}
+			casn := NewCasnDescriptor(NewCasnEntry(m.nodeAt(n), N, &newN),
+				NewCasnEntry(m.nodeAt(2*n+1), r, &newR))
 
-	tree := m.nodeAt(n)
-	if tree.CompareAndSwap(N, &newN) {
-		return
+			if casn.Casn() {
+				n = 2*n + 1
+				continue
+			}
+		default:
+			newN := Word[CMNode]{value: CMNode{
+				list:  N.value.list,
+				dirty: false,
+			}}
+
+			tree := m.nodeAt(n)
+			if tree.CompareAndSwap(N, &newN) {
+				return
+			}
+		}
 	}
 }
 
@@ -212,7 +226,7 @@ func (m *MoundTree) binarySearch(leaf, v uint32) uint32 {
 	for l <= r {
 		mid := (l + r) >> 1
 		c := leaf >> (bits.Len32(leaf) - 1 - mid)
-		if priority(DcssRead(m.nodeAt(c))) >= v {
+		if priority(CasnRead(m.nodeAt(c))) >= v {
 			ans = c
 			r = mid - 1
 		} else {

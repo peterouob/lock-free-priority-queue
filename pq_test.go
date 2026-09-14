@@ -2,6 +2,8 @@ package pq
 
 import (
 	"math/bits"
+	"reflect"
+	"strconv"
 	"sync"
 	"testing"
 )
@@ -42,21 +44,31 @@ func TestBinarySearch(t *testing.T) {
 func checkMoundProperty(t *testing.T, m *MoundTree) {
 	d := m.depth.Load()
 	for c := uint32(2); c < 1<<d; c++ {
-		p, ch := priority(DcssRead(m.nodeAt(c/2))), priority(DcssRead(m.nodeAt(c)))
+		p, ch := priority(dcssRead(m.nodeAt(c/2))), priority(dcssRead(m.nodeAt(c)))
 		if p > ch {
 			t.Errorf("violated at %d: parent=%d child=%d", c, p, ch)
 		}
 	}
 }
 
-func TestInsert(t *testing.T) {
+func TestExtractMinOrder(t *testing.T) {
 	m := NewMoundTree()
-	for _, p := range []uint32{10, 20, 30, 40, 50, 5} {
-		m.Insert(CDNData{priority: p})
+
+	in := []uint32{10, 20, 30, 40, 50, 5}
+	for i, p := range in {
+		m.Insert(CDNData{priority: p, value: strconv.Itoa(100 + i)})
+	}
+
+	var got []uint32
+	for range in {
+		d := m.ExtractMin()
+		got = append(got, d.priority)
 		checkMoundProperty(t, m)
 	}
-	if got := priority(DcssRead(m.nodeAt(1))); got != 5 {
-		t.Errorf("root = %d, want 5", got)
+
+	want := []uint32{5, 10, 20, 30, 40, 50}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("drained %v, want %v", got, want)
 	}
 }
 

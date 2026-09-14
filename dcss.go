@@ -82,7 +82,7 @@ func (d *DcssDescriptor[C, V]) Complete() {
 
 	if s == UNDECIDED {
 		decision := SUCCEEDED
-		if DcssRead(d.a1) != d.o1 {
+		if dcssRead(d.a1) != d.o1 {
 			decision = FAILED
 		}
 		d.status.CompareAndSwap(UNDECIDED, decision)
@@ -97,7 +97,7 @@ func (d *DcssDescriptor[C, V]) Complete() {
 	d.a2.CompareAndSwap(d.self, d.o2)
 }
 
-func DcssRead[V any](addr *atomic.Pointer[Word[V]]) *Word[V] {
+func dcssRead[V any](addr *atomic.Pointer[Word[V]]) *Word[V] {
 	for {
 		r := addr.Load()
 		isDesc, ok := r.desc.(dcssDescriptor)
@@ -183,7 +183,7 @@ func (cd *CasnDescriptor[V]) Casn() bool {
 
 func CasnRead[V any](addr *atomic.Pointer[Word[V]]) *Word[V] {
 	for {
-		r := DcssRead(addr)
+		r := dcssRead(addr)
 		isCasn, ok := r.desc.(*CasnDescriptor[V])
 		if !ok {
 			return r

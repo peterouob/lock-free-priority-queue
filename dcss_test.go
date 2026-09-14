@@ -22,15 +22,15 @@ func TestCompleteClearDescriptor(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := newSlot(0)
 			data := newSlot(42)
-			o1 := DcssRead(ctrl)
-			o2 := DcssRead(data)
+			o1 := dcssRead(ctrl)
+			o2 := dcssRead(data)
 			d := NewDcssDescriptor(ctrl, o1, data, o2, newWord(99))
 
 			data.Store(d.self)
 			d.status.Store(tc.status)
 
 			d.Complete()
-			got := DcssRead(data)
+			got := dcssRead(data)
 			assert.Nil(t, got.desc, "a2 still gave descriptor")
 
 			assert.Equal(t, tc.want, got.value)
@@ -54,8 +54,8 @@ func newSlot[V any](v V) *atomic.Pointer[Word[V]] {
 func TestHelperMakesProgressOnStalledDescriptor(t *testing.T) {
 	ctrl := newSlot(0)
 	data := newSlot(42)
-	o1 := DcssRead(ctrl)
-	o2 := DcssRead(data)
+	o1 := dcssRead(ctrl)
+	o2 := dcssRead(data)
 
 	w99 := newWord(99)
 	a := NewDcssDescriptor(ctrl, o1, data, o2, w99)
@@ -72,7 +72,7 @@ func TestHelperMakesProgressOnStalledDescriptor(t *testing.T) {
 
 	select {
 	case <-done:
-		assert.Equal(t, 123, DcssRead(data).value)
+		assert.Equal(t, 123, dcssRead(data).value)
 	case <-time.After(time.Second):
 		t.Fatal("owner stopped helper cannot do anything")
 	}
