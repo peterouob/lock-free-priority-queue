@@ -2,6 +2,7 @@ package pq
 
 import (
 	"math/bits"
+	"math/rand/v2"
 	"reflect"
 	"strconv"
 	"sync"
@@ -86,4 +87,54 @@ func TestInsertConcurrent(t *testing.T) {
 	}
 	wg.Wait()
 	checkMoundProperty(t, m)
+}
+
+func TestExtractMinConcurrent(t *testing.T) {
+	const n = 1000
+	m := NewMoundTree()
+	for i := range n {
+		m.Insert(CDNData{priority: uint32(i), value: strconv.Itoa(i)})
+	}
+
+	var mu sync.Mutex
+	seen := make(map[string]bool, n)
+	ch := make(chan string, n)
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			for range n / 8 {
+				d := m.ExtractMin()
+				mu.Lock()
+				if seen[d.value] {
+					t.Errorf("value %s extracted twice", d.value)
+				}
+				seen[d.value] = true
+				ch <- d.value
+				mu.Unlock()
+			}
+		})
+	}
+	wg.Wait()
+	close(ch)
+
+	if len(seen) != n {
+		t.Fatalf("extracted %d distinct items, want %d", len(seen), n)
+	}
+}
+
+func TestExtractMinMonotonic(t *testing.T) {
+	const n = 1000
+	m := NewMoundTree()
+	for i := range n {
+		m.Insert(CDNData{priority: uint32(rand.Perm(n)[i]), value: strconv.Itoa(i)})
+	}
+
+	prev := uint32(0)
+	for i := range n {
+		d := m.ExtractMin()
+		if i > 0 && d.priority < prev {
+			t.Fatalf("extract %d: priority %d < previous %d", i, d.priority, prev)
+		}
+		prev = d.priority
+	}
 }
