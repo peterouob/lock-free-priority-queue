@@ -105,10 +105,41 @@ func (m *MoundTree) findInsertPoint(v uint32) uint32 {
 
 		m.grow(d)
 	}
+
+}
+
+func (m *MoundTree) ExtractMin() CDNData {
+	for {
+		tree := m.nodeAt(1)
+		R := tree.Load()
+
+		if R.value.dirty {
+			m.moundify(1)
+			continue
+		}
+
+		if R.value.list == nil {
+			return CDNData{}
+		}
+
+		newR := &Word[CMNode]{
+			value: CMNode{
+				list:  R.value.list.next,
+				dirty: true,
+			},
+		}
+
+		if tree.CompareAndSwap(R, newR) {
+			retval := R.value.list.value
+			R.value.list = nil
+			m.moundify(1)
+			return retval
+		}
+	}
 }
 
 func (m *MoundTree) moundify(n uint32) {
-	N := DcssRead(m.nodeAt(n))
+	N := CasnRead(m.nodeAt(n))
 	d := m.depth.Load()
 	if !N.value.dirty || (n >= (1<<(d-1)) && n < (1<<d)) {
 		return
@@ -125,15 +156,54 @@ func (m *MoundTree) moundify(n uint32) {
 	m.moundify(2*n + 1)
 
 	if priority(l) <= priority(r) && priority(l) <= priority(N) {
-		// TODO:DCAS
+		L := CasnRead(m.nodeAt(2 * n))
+
+		newN := Word[CMNode]{value: CMNode{
+			list:  L.value.list,
+			dirty: false,
+		}}
+
+		newL := Word[CMNode]{value: CMNode{
+			list:  N.value.list,
+			dirty: true,
+		}}
+
+		casn := NewCasnDescriptor(NewCasnEntry(m.nodeAt(n), N, &newN),
+			NewCasnEntry(m.nodeAt(2*n), L, &newL))
+		casn.Casn()
+
 		m.moundify(2 * n)
 		return
-	} else if priority(r) < priority(l) && priority(r) < priority(N) { // TODO:DCAS
+	} else if priority(r) < priority(l) && priority(r) < priority(N) {
+		R := CasnRead(m.nodeAt(2*n + 1))
+
+		newN := Word[CMNode]{value: CMNode{
+			list:  R.value.list,
+			dirty: false,
+		}}
+
+		newR := Word[CMNode]{value: CMNode{
+			list:  N.value.list,
+			dirty: true,
+		}}
+
+		casn := NewCasnDescriptor(NewCasnEntry(m.nodeAt(n), N, &newN),
+			NewCasnEntry(m.nodeAt(2*n+1), R, &newR))
+		casn.Casn()
+
 		m.moundify(2*n + 1)
 		return
 	}
 
-	// TODO:CAS
+	newN := Word[CMNode]{value: CMNode{
+		list:  N.value.list,
+		dirty: false,
+	}}
+
+	tree := m.nodeAt(n)
+	if tree.CompareAndSwap(N, &newN) {
+		return
+	}
 }
 
 func (m *MoundTree) binarySearch(leaf, v uint32) uint32 {
