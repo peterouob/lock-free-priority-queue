@@ -181,8 +181,10 @@ func (m *MoundTree) moundify(n uint32) {
 				dirty: true,
 			}}
 
-			casn := NewCasnDescriptor(NewCasnEntry(m.nodeAt(n), N, &newN),
-				NewCasnEntry(m.nodeAt(n*2), l, &newL))
+			e1 := NewCasnEntry(m.nodeAt(n), N, &newN)
+			e2 := NewCasnEntry(m.nodeAt(n*2), l, &newL)
+
+			casn := NewCasnDescriptor(e1, e2)
 
 			if casn.Casn() {
 				n = 2 * n

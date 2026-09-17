@@ -1,7 +1,6 @@
 package pq
 
 import (
-	"sort"
 	"sync/atomic"
 	"unsafe"
 )
@@ -127,17 +126,18 @@ func NewCasnEntry[V any](addr *atomic.Pointer[Word[V]], old, new *Word[V]) CasnE
 
 type CasnDescriptor[V any] struct {
 	status  atomic.Pointer[Word[int32]]
-	entries []CasnEntry[V]
+	entries [2]CasnEntry[V]
 
 	self *Word[V]
 }
 
-func NewCasnDescriptor[V any](entries ...CasnEntry[V]) *CasnDescriptor[V] {
-	sort.Slice(entries, func(i, j int) bool {
-		return uintptr(unsafe.Pointer(entries[i].addr)) < uintptr(unsafe.Pointer(entries[j].addr))
-	})
+func NewCasnDescriptor[V any](e1, e2 CasnEntry[V]) *CasnDescriptor[V] {
 
-	c := &CasnDescriptor[V]{entries: entries}
+	if uintptr(unsafe.Pointer(e2.addr)) > uintptr(unsafe.Pointer(e1.addr)) {
+		e2, e1 = e1, e2
+	}
+
+	c := &CasnDescriptor[V]{entries: [2]CasnEntry[V]{e1, e2}}
 	c.status.Store(CasnUndecided)
 	c.self = &Word[V]{desc: c}
 	return c

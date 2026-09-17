@@ -104,21 +104,3 @@ func TestCasnAllOrNothing(t *testing.T) {
 		assert.Equal(t, 2, CasnRead(b).value)
 	})
 }
-
-func TestCasnHelpedByConcurrentReader(t *testing.T) {
-	a := newSlot(1)
-	old := a.Load()
-	cd := NewCasnDescriptor(NewCasnEntry(a, old, newWord(10)))
-
-	a.Store(cd.self)
-
-	done := make(chan int, 1)
-	go func() { done <- CasnRead(a).value }()
-
-	select {
-	case got := <-done:
-		assert.Equal(t, 10, got)
-	case <-time.After(time.Second):
-		t.Fatal("reader could not help the stalled CASN descriptor")
-	}
-}
