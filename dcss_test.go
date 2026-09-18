@@ -26,7 +26,7 @@ func TestCompleteClearDescriptor(t *testing.T) {
 			o2 := dcssRead(data)
 			d := NewDcssDescriptor(ctrl, o1, data, o2, newWord(99))
 
-			data.Store(d.self)
+			data.Store(&d.selfWord)
 			d.status.Store(tc.status)
 
 			d.Complete()
@@ -59,7 +59,7 @@ func TestHelperMakesProgressOnStalledDescriptor(t *testing.T) {
 
 	w99 := newWord(99)
 	a := NewDcssDescriptor(ctrl, o1, data, o2, w99)
-	data.Store(a.self)
+	data.Store(&a.selfWord)
 	a.status.Store(SUCCEEDED)
 
 	b := NewDcssDescriptor(ctrl, o1, data, w99, newWord(123))

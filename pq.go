@@ -4,6 +4,7 @@ import (
 	"math"
 	"math/bits"
 	"math/rand/v2"
+	"runtime"
 	"sync/atomic"
 )
 
@@ -57,21 +58,17 @@ func NewMoundTree() *MoundTree {
 
 func (m *MoundTree) Insert(data CDNData) {
 	v := data.priority
+	node := &LNode{value: data}
 	for {
 		c := m.findInsertPoint(v)
 		addr := m.nodeAt(c)
-		C := CasnRead(addr)
+		C := dcssRead(addr)
 
 		if priority(C) < v {
 			continue
 		}
-
-		C2 := &Word[CMNode]{
-			value: CMNode{
-				list:  &LNode{value: data, next: C.value.list},
-				dirty: C.value.dirty,
-			},
-		}
+		node.next = C.value.list
+		C2 := &Word[CMNode]{value: CMNode{list: node, dirty: C.value.dirty}}
 
 		switch c {
 		case 1:
@@ -80,7 +77,7 @@ func (m *MoundTree) Insert(data CDNData) {
 			}
 		default:
 			paddr := m.nodeAt(c / 2)
-			P := CasnRead(paddr)
+			P := dcssRead(paddr)
 			if priority(P) > v {
 				continue
 			}
@@ -97,15 +94,106 @@ func (m *MoundTree) findInsertPoint(v uint32) uint32 {
 	for {
 		d := m.depth.Load()
 		for range maxDepth {
-			leaf := m.randomLeaf()
-			if priority(CasnRead(m.nodeAt(leaf))) >= v {
+			leaf := m.randomLeaf(d)
+
+			addr := m.nodeAt(leaf)
+			if addr == nil {
+				break
+			}
+
+			if priority(dcssRead(addr)) >= v {
 				return m.binarySearch(leaf, v)
 			}
 		}
 
 		m.grow(d)
 	}
+}
 
+var shardLevel = uint32(bits.Len(uint(runtime.GOMAXPROCS(0) - 1)))
+
+func (m *MoundTree) shardBase() (base, span uint32) {
+	d := m.depth.Load()
+	L := shardLevel
+	if L >= d {
+		L = d - 1
+	}
+	base = uint32(1) << L
+	return base, base
+}
+
+func (m *MoundTree) tryExtractMin(n uint32) (CDNData, bool) {
+	addr := m.nodeAt(n)
+	if addr == nil {
+		return CDNData{}, false
+	}
+
+	N := CasnRead(addr)
+	if N.value.dirty {
+		m.moundify(n)
+		return CDNData{}, false
+	}
+
+	if N.value.list == nil {
+		return CDNData{}, false
+	}
+
+	newN := &Word[CMNode]{value: CMNode{
+		list:  N.value.list.next,
+		dirty: true,
+	}}
+
+	if !addr.CompareAndSwap(N, newN) {
+		return CDNData{}, false
+	}
+
+	retval := N.value.list.value
+	m.moundify(n)
+	return retval, true
+}
+
+func (m *MoundTree) extractTwoChoice() (CDNData, bool) {
+	base, span := m.shardBase()
+	if span <= 1 {
+		return m.tryExtractMin(1)
+	}
+
+	i := base + rand.Uint32N(span)
+	j := base + rand.Uint32N(span)
+
+	if i != j {
+		ai, aj := m.nodeAt(i), m.nodeAt(j)
+		if ai == nil || aj == nil {
+			return CDNData{}, false
+		}
+
+		if priority(CasnRead(ai)) > priority(CasnRead(aj)) {
+			i = j
+		}
+	}
+
+	return m.tryExtractMin(i)
+}
+
+const maxExtractRetry = 3
+
+func (m *MoundTree) RelaxExtractMin() CDNData {
+	if addr := m.nodeAt(1); addr != nil {
+		R := CasnRead(addr)
+		if !R.value.dirty && R.value.list != nil {
+			if v, ok := m.tryExtractMin(1); ok {
+				return v
+			}
+		}
+	}
+
+	for range maxExtractRetry {
+		if v, ok := m.extractTwoChoice(); ok {
+			return v
+		}
+	}
+
+	return m.ExtractMin()
 }
 
 func (m *MoundTree) ExtractMin() CDNData {
@@ -139,6 +227,11 @@ func (m *MoundTree) ExtractMin() CDNData {
 
 func (m *MoundTree) moundify(n uint32) {
 	for {
+		addr := m.nodeAt(n)
+		if addr == nil {
+			return
+		}
+
 		N := CasnRead(m.nodeAt(n))
 
 		if !N.value.dirty {
@@ -155,22 +248,40 @@ func (m *MoundTree) moundify(n uint32) {
 			continue
 		}
 
-		l := CasnRead(m.nodeAt(n * 2))
-
-		if l.value.dirty {
-			m.moundify(2 * n)
+		treetwon := m.nodeAt(n * 2)
+		if treetwon == nil {
+			newN := &Word[CMNode]{value: CMNode{list: N.value.list, dirty: false}}
+			if m.nodeAt(n).CompareAndSwap(N, newN) {
+				return
+			}
 			continue
 		}
 
-		r := CasnRead(m.nodeAt(n*2 + 1))
+		l := CasnRead(treetwon)
+
+		if l.value.dirty {
+			n = 2 * n
+			continue
+		}
+
+		treetwonpone := m.nodeAt(n*2 + 1)
+		if treetwonpone == nil {
+			newN := &Word[CMNode]{value: CMNode{list: N.value.list, dirty: false}}
+			if m.nodeAt(n).CompareAndSwap(N, newN) {
+				return
+			}
+			continue
+		}
+
+		r := CasnRead(treetwonpone)
 
 		if r.value.dirty {
-			m.moundify(2*n + 1)
+			n = 2*n + 1
 			continue
 		}
 
 		switch {
-		case priority(l) <= priority(r) && priority(l) <= priority(N):
+		case priority(l) <= priority(r) && priority(l) < priority(N):
 			newN := Word[CMNode]{value: CMNode{
 				list:  l.value.list,
 				dirty: false,
@@ -201,8 +312,10 @@ func (m *MoundTree) moundify(n uint32) {
 				dirty: true,
 			}}
 
-			casn := NewCasnDescriptor(NewCasnEntry(m.nodeAt(n), N, &newN),
-				NewCasnEntry(m.nodeAt(2*n+1), r, &newR))
+			e1 := NewCasnEntry(m.nodeAt(n), N, &newN)
+			e2 := NewCasnEntry(m.nodeAt(n*2+1), r, &newR)
+
+			casn := NewCasnDescriptor(e1, e2)
 
 			if casn.Casn() {
 				n = 2*n + 1
@@ -243,22 +356,23 @@ func (m *MoundTree) grow(d uint32) {
 		return
 	}
 
-	m.levels[d].CompareAndSwap(nil, newLevel(d))
+	if m.levels[d].Load() == nil {
+		m.levels[d].CompareAndSwap(nil, newLevel(d))
+	}
 	m.depth.CompareAndSwap(d, d+1)
 }
 
 func (m *MoundTree) nodeAt(c uint32) *atomic.Pointer[Word[CMNode]] {
 	d := uint32(bits.Len32(c) - 1)
-	lv := m.levels[d].Load()
-	if lv == nil {
+	if d >= m.depth.Load() {
 		return nil
 	}
 
+	lv := m.levels[d].Load()
 	return &lv.slots[c-(1<<d)]
 }
 
-func (m *MoundTree) randomLeaf() uint32 {
-	d := m.depth.Load()
+func (m *MoundTree) randomLeaf(d uint32) uint32 {
 	base := uint32(1) << (d - 1)
 
 	return base + rand.Uint32N(base)

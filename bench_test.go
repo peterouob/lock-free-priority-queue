@@ -16,6 +16,7 @@ import (
 type priorityQueue interface {
 	Insert(CDNData)
 	ExtractMin() CDNData
+	RelaxExtractMin() CDNData
 }
 
 type queueFactory struct {
@@ -33,6 +34,7 @@ type workload int
 const (
 	workloadInsert workload = iota
 	workloadExtractMin
+	workloadExtractRelax
 	workloadMixed50
 )
 
@@ -226,7 +228,12 @@ func runWorkers(q priorityQueue, data []CDNData, workers, perWorker int, w workl
 						q.ExtractMin()
 					}
 				}
+			case workloadExtractRelax:
+				for range chunk {
+					q.RelaxExtractMin()
+				}
 			}
+
 		}(i)
 	}
 
@@ -234,9 +241,6 @@ func runWorkers(q priorityQueue, data []CDNData, workers, perWorker int, w workl
 }
 
 func runWorkload(b *testing.B, f queueFactory, workers int, w workload) {
-	stopProfiles := startProfiles(b)
-	defer stopProfiles()
-
 	perWorker := totalOps(b) / workers
 	if perWorker == 0 {
 		b.Fatalf("total ops %d is smaller than worker count %d", totalOps(b), workers)
@@ -252,6 +256,8 @@ func runWorkload(b *testing.B, f queueFactory, workers int, w workload) {
 	b.ReportAllocs()
 	b.ResetTimer()
 
+	profiled := false
+
 	for range b.N {
 		b.StopTimer()
 		q := f.make(total)
@@ -260,9 +266,21 @@ func runWorkload(b *testing.B, f queueFactory, workers int, w workload) {
 			fillQueue(q, data)
 		}
 		settleHeap()
+
+		var stopProfiles func()
+		if !profiled {
+			profiled = true
+			stopProfiles = startProfiles(b)
+		}
 		b.StartTimer()
 
 		runWorkers(q, data, workers, perWorker, w)
+
+		if stopProfiles != nil {
+			b.StopTimer()
+			stopProfiles()
+			b.StartTimer()
+		}
 	}
 
 	b.StopTimer()
@@ -301,4 +319,8 @@ func BenchmarkExtractMin(b *testing.B) {
 
 func BenchmarkMixed50(b *testing.B) {
 	runMatrix(b, workloadMixed50)
+}
+
+func BenchmarkExtractRelax(b *testing.B) {
+	runMatrix(b, workloadExtractRelax)
 }

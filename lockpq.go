@@ -28,6 +28,17 @@ type LockPQ struct {
 	h  lockHeap
 }
 
+func (q *LockPQ) RelaxExtractMin() CDNData {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	if q.h.Len() == 0 {
+		return CDNData{}
+	}
+
+	return heap.Pop(&q.h).(CDNData)
+}
+
 func NewLockPQ(capacity int) *LockPQ {
 	return &LockPQ{h: make(lockHeap, 0, capacity)}
 }

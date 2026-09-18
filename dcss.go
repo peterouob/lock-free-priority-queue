@@ -42,9 +42,18 @@ type DcssDescriptor[C, V any] struct {
 	o2 *Word[V]                 // expect old value
 	n2 *Word[V]                 // new value
 
-	self *Word[V]
+	selfWord Word[V]
 
 	status atomic.Int32
+}
+
+func (d *DcssDescriptor[C, V]) init(
+	a1 *atomic.Pointer[Word[C]], o1 *Word[C],
+	a2 *atomic.Pointer[Word[V]], o2 *Word[V],
+	n2 *Word[V],
+) {
+	d.a1, d.o1, d.a2, d.o2, d.n2 = a1, o1, a2, o2, n2
+	d.selfWord.desc = d
 }
 
 func NewDcssDescriptor[C, V any](
@@ -52,14 +61,15 @@ func NewDcssDescriptor[C, V any](
 	a2 *atomic.Pointer[Word[V]], o2 *Word[V],
 	n2 *Word[V],
 ) *DcssDescriptor[C, V] {
-	d := &DcssDescriptor[C, V]{a1: a1, o1: o1, a2: a2, o2: o2, n2: n2}
-	d.self = &Word[V]{desc: d}
+	d := &DcssDescriptor[C, V]{}
+	d.init(a1, o1, a2, o2, n2)
 	return d
 }
 
 func (d *DcssDescriptor[C, V]) dcssDescriptor() {}
 
 func (d *DcssDescriptor[C, V]) Dcss() *Word[V] {
+	self := &d.selfWord
 	for {
 		r := d.a2.Load()
 		if isDesc, ok := r.desc.(dcssDescriptor); ok {
@@ -69,7 +79,7 @@ func (d *DcssDescriptor[C, V]) Dcss() *Word[V] {
 		if r != d.o2 {
 			return r
 		}
-		if d.a2.CompareAndSwap(d.o2, d.self) {
+		if d.a2.CompareAndSwap(d.o2, self) {
 			d.Complete()
 			return d.o2
 		}
@@ -88,12 +98,13 @@ func (d *DcssDescriptor[C, V]) Complete() {
 		s = d.status.Load()
 	}
 
+	self := &d.selfWord
 	if s == SUCCEEDED {
-		d.a2.CompareAndSwap(d.self, d.n2)
+		d.a2.CompareAndSwap(self, d.n2)
 		return
 	}
 
-	d.a2.CompareAndSwap(d.self, d.o2)
+	d.a2.CompareAndSwap(self, d.o2)
 }
 
 func dcssRead[V any](addr *atomic.Pointer[Word[V]]) *Word[V] {
@@ -128,7 +139,8 @@ type CasnDescriptor[V any] struct {
 	status  atomic.Pointer[Word[int32]]
 	entries [2]CasnEntry[V]
 
-	self *Word[V]
+	selfWord Word[V]
+	dcss     [2]DcssDescriptor[int32, V]
 }
 
 func NewCasnDescriptor[V any](e1, e2 CasnEntry[V]) *CasnDescriptor[V] {
@@ -139,43 +151,49 @@ func NewCasnDescriptor[V any](e1, e2 CasnEntry[V]) *CasnDescriptor[V] {
 
 	c := &CasnDescriptor[V]{entries: [2]CasnEntry[V]{e1, e2}}
 	c.status.Store(CasnUndecided)
-	c.self = &Word[V]{desc: c}
+	c.selfWord.desc = c
+
+	for i := range c.entries {
+		c.dcss[i].init(&c.status, CasnUndecided, c.entries[i].addr, c.entries[i].old, &c.selfWord)
+	}
+
 	return c
 }
 
 func (cd *CasnDescriptor[V]) Complete() {}
 
 func (cd *CasnDescriptor[V]) Casn() bool {
+	self := &cd.selfWord
+
 	if cd.status.Load() == CasnUndecided {
 		status := CasnSucceeded
 
 		for i := 0; i < len(cd.entries) && status == CasnSucceeded; i++ {
-		retry:
 			e := cd.entries[i]
-			d := NewDcssDescriptor(&cd.status, CasnUndecided, e.addr, e.old, cd.self)
+			d := &cd.dcss[i]
 
-			switch val := d.Dcss(); {
-			case val == cd.self:
-			case val.desc != nil:
-				if isCasn, ok := val.desc.(*CasnDescriptor[V]); ok {
-					isCasn.Casn()
+		retry:
+			switch val := d.Dcss(); val {
+			case e.old:
+			case self:
+			default:
+				if other, ok := val.desc.(*CasnDescriptor[V]); ok && other != cd {
+					other.Casn()
 					goto retry
 				}
-			case val != e.old:
 				status = CasnFailed
 			}
 		}
-
 		cd.status.CompareAndSwap(CasnUndecided, status)
 	}
 
 	succeeded := cd.status.Load() == CasnSucceeded
 	for _, e := range cd.entries {
 		if succeeded {
-			e.addr.CompareAndSwap(cd.self, e.new)
+			e.addr.CompareAndSwap(self, e.new)
 			continue
 		}
-		e.addr.CompareAndSwap(cd.self, e.old)
+		e.addr.CompareAndSwap(self, e.old)
 	}
 
 	return succeeded

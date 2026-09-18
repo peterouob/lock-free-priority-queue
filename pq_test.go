@@ -3,7 +3,6 @@ package pq
 import (
 	"math/bits"
 	"math/rand/v2"
-	"reflect"
 	"strconv"
 	"sync"
 	"testing"
@@ -43,33 +42,49 @@ func TestBinarySearch(t *testing.T) {
 }
 
 func checkMoundProperty(t *testing.T, m *MoundTree) {
+	t.Helper()
 	d := m.depth.Load()
-	for c := uint32(2); c < 1<<d; c++ {
-		p, ch := priority(dcssRead(m.nodeAt(c/2))), priority(dcssRead(m.nodeAt(c)))
-		if p > ch {
-			t.Errorf("violated at %d: parent=%d child=%d", c, p, ch)
+	limit := uint32(1) << d
+
+	for n := uint32(1); n < limit; n++ {
+		addr := m.nodeAt(n)
+		if addr == nil {
+			continue
+		}
+		N := CasnRead(addr)
+		if N.value.dirty {
+			continue
+		}
+
+		for _, c := range []uint32{2 * n, 2*n + 1} {
+			cAddr := m.nodeAt(c)
+			if cAddr == nil {
+				continue
+			}
+			C := CasnRead(cAddr)
+			if priority(N) > priority(C) {
+				t.Errorf("violated at %d: parent=%d child=%d",
+					n, priority(N), priority(C))
+			}
 		}
 	}
 }
 
-func TestExtractMinOrder(t *testing.T) {
-	m := NewMoundTree()
-
-	in := []uint32{10, 20, 30, 40, 50, 5}
-	for i, p := range in {
-		m.Insert(CDNData{priority: p, value: strconv.Itoa(100 + i)})
-	}
-
-	var got []uint32
-	for range in {
-		d := m.ExtractMin()
-		got = append(got, d.priority)
-		checkMoundProperty(t, m)
-	}
-
-	want := []uint32{5, 10, 20, 30, 40, 50}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("drained %v, want %v", got, want)
+func TestExtractMinOrderRandom(t *testing.T) {
+	for trial := range 100 {
+		m := NewMoundTree()
+		n := 50 + rand.IntN(200)
+		vals := rand.Perm(n)
+		for i, v := range vals {
+			m.Insert(CDNData{priority: uint32(v), value: strconv.Itoa(i)})
+		}
+		for i := range n {
+			got := m.ExtractMin()
+			if got.priority != uint32(i) {
+				t.Fatalf("trial %d: pop %d, want %d", trial, got.priority, i)
+			}
+			checkMoundProperty(t, m)
+		}
 	}
 }
 
