@@ -62,7 +62,7 @@ func (m *MoundTree) Insert(data CDNData) {
 	for {
 		c := m.findInsertPoint(v)
 		addr := m.nodeAt(c)
-		C := dcssRead(addr)
+		C := CasnRead(addr)
 
 		if priority(C) < v {
 			continue
@@ -77,13 +77,13 @@ func (m *MoundTree) Insert(data CDNData) {
 			}
 		default:
 			paddr := m.nodeAt(c / 2)
-			P := dcssRead(paddr)
+			P := CasnRead(paddr)
 			if priority(P) > v {
 				continue
 			}
 
 			dcss := NewDcssDescriptor(paddr, P, addr, C, C2)
-			if dcss.Dcss() == C {
+			if dcss.Dcss() == C && dcss.status.Load() == SUCCEEDED {
 				return
 			}
 		}
@@ -101,7 +101,7 @@ func (m *MoundTree) findInsertPoint(v uint32) uint32 {
 				break
 			}
 
-			if priority(dcssRead(addr)) >= v {
+			if priority(CasnRead(addr)) >= v {
 				return m.binarySearch(leaf, v)
 			}
 		}

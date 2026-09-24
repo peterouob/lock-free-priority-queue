@@ -153,3 +153,58 @@ func TestExtractMinMonotonic(t *testing.T) {
 		prev = d.priority
 	}
 }
+
+func TestStressMixed(t *testing.T) {
+	for trial := range 30 {
+		m := NewMoundTree()
+		const W, per = 8, 3000
+		var mu sync.Mutex
+		got := map[string]int{}
+		var wg sync.WaitGroup
+		for w := range W {
+			wg.Go(func() {
+				r := rand.New(rand.NewPCG(uint64(trial), uint64(w)))
+				var local []string
+				for j := range per {
+					id := strconv.Itoa(w*per + j)
+					m.Insert(CDNData{value: id, priority: r.Uint32N(5000)})
+					if r.IntN(3) > 0 {
+						var d CDNData
+						if r.IntN(2) == 0 {
+							d = m.ExtractMin()
+						} else {
+							d = m.RelaxExtractMin()
+						}
+						if d.value != "" {
+							local = append(local, d.value)
+						}
+					}
+				}
+				mu.Lock()
+				for _, v := range local {
+					got[v]++
+				}
+				mu.Unlock()
+			})
+		}
+		wg.Wait()
+		checkMoundProperty(t, m)
+		prev := uint32(0)
+		for {
+			d := m.ExtractMin()
+			if d.value == "" {
+				break
+			}
+			if d.priority < prev {
+				t.Fatalf("trial %d: drain not sorted %d < %d", trial, d.priority, prev)
+			}
+			prev = d.priority
+			got[d.value]++
+		}
+		for i := range W * per {
+			if c := got[strconv.Itoa(i)]; c != 1 {
+				t.Fatalf("trial %d: item %d seen %d times", trial, i, c)
+			}
+		}
+	}
+}
