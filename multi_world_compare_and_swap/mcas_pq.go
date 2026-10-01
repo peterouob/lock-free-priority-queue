@@ -17,14 +17,15 @@ type MCASDescriptor[V any] struct {
 
 type MCASWord[V any] struct {
 	value V
-	idx   int
-	desc  *MCASDescriptor[V]
+	desc  *WordDescriptor[V]
 }
 
 type WordDescriptor[V any] struct {
 	addr *atomic.Pointer[MCASWord[V]]
 	old  *MCASWord[V]
 	new  *MCASWord[V]
+
+	parent *MCASDescriptor[V]
 
 	selfWord MCASWord[V]
 }
@@ -62,13 +63,49 @@ func NewMCASDescriptor[V any](words ...WordDescriptor[V]) (*MCASDescriptor[V], e
 		switch {
 		case w.addr == nil:
 			return nil, ErrNilAddress
-		case w.new != nil && w.new.desc != nil:
+		case (w.new != nil && w.new.desc != nil) ||
+			(w.old != nil && w.old.desc != nil):
 			return nil, ErrMustBeValueWord
 		case i > 0 && ws[i-1].addr == ws[i].addr:
 			return nil, ErrDuplicateAddr
 		default:
-			w.selfWord = MCASWord[V]{desc: d, idx: i}
+			w.parent = d
+			w.selfWord = MCASWord[V]{desc: w}
 		}
 	}
 	return d, nil
+}
+
+func (m *MCASDescriptor[V]) readInternal(addr *atomic.Pointer[MCASWord[V]]) (*MCASWord[V], *MCASWord[V]) {
+	for {
+		val := addr.Load()
+
+		if val == nil || val.desc == nil {
+			return val, val
+		}
+
+		parent := val.desc.parent
+
+		status := parent.status.Load()
+
+		if parent != m && status == ACTIVE {
+			m.MCAS(parent)
+			continue
+		}
+
+		if status == SUCCESSFUL {
+			return val, val.desc.new
+		}
+
+		return val, val.desc.old
+	}
+}
+
+func Read[V any](addr *atomic.Pointer[MCASWord[V]]) *MCASWord[V] {
+	_, v := (*MCASDescriptor[V])(nil).readInternal(addr)
+
+	return v
+}
+
+func (m *MCASDescriptor[V]) MCAS(mcas *MCASDescriptor[V]) {
 }
