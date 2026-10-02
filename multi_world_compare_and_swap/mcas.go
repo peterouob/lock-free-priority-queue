@@ -107,5 +107,40 @@ func Read[V any](addr *atomic.Pointer[MCASWord[V]]) *MCASWord[V] {
 	return v
 }
 
-func (m *MCASDescriptor[V]) MCAS(mcas *MCASDescriptor[V]) {
+func (m *MCASDescriptor[V]) MCAS(desc *MCASDescriptor[V]) bool {
+	success := true
+	for i := range m.words {
+		word := m.words[i]
+	retry_word:
+		content, value := m.readInternal(word.addr)
+
+		if content == &word.selfWord {
+			continue
+		}
+
+		if value != word.old {
+			success = false
+			break
+		}
+
+		status := desc.status.Load()
+
+		if status != ACTIVE {
+			break
+		}
+
+		if !word.addr.CompareAndSwap(content, &word.selfWord) {
+			goto retry_word
+		}
+
+		status = SUCCESSFUL
+		if !success {
+			status = FAIL
+		}
+
+		if desc.status.CompareAndSwap(ACTIVE, status) {
+			return desc.status.Load() == SUCCESSFUL
+		}
+	}
+	return false
 }
