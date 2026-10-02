@@ -25,8 +25,8 @@ type queueFactory struct {
 }
 
 var queueFactories = []queueFactory{
-	{name: "LockFreeMound", make: func(int) priorityQueue { return NewMoundTree() }},
-	{name: "MCASMound", make: func(int) priorityQueue { return NewMCASMoundTree() }},
+	{name: "LockFreeNCASMound", make: func(int) priorityQueue { return NewMoundTree() }},
+	{name: "LockFreeMCASMound", make: func(int) priorityQueue { return NewMCASMoundTree() }},
 	{name: "MutexHeap", make: func(capacity int) priorityQueue { return NewLockPQ(capacity) }},
 }
 
