@@ -6,3 +6,9 @@ pprof:
 	go tool pprof -http=: './prof/BenchmarkMixed50_LockFreeNCASMound_workers=8.cpu.pprof'
 trace:
 	go tool trace './prof/BenchmarkMixed50_LockFreeNCASMound_workers=8.trace.out'
+align:
+	fieldalignment ./...
+align_fix:
+	fieldalignment -fix ./...
+
+.PHONY: test test_ops pprof trace align align_fix
