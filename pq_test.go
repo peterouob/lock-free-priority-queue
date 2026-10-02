@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-func buildTree(vals []int) *MoundTree {
-	m := &MoundTree{}
+func buildTree(vals []int) *NCASMoundTree {
+	m := &NCASMoundTree{}
 	d := uint32(bits.Len32(uint32(len(vals) - 1)))
 	for lv := range d {
 		m.levels[lv].Store(newLevel(lv))
@@ -41,7 +41,7 @@ func TestBinarySearch(t *testing.T) {
 	}
 }
 
-func checkMoundProperty(t *testing.T, m *MoundTree) {
+func checkMoundProperty(t *testing.T, m *NCASMoundTree) {
 	t.Helper()
 	d := m.depth.Load()
 	limit := uint32(1) << d

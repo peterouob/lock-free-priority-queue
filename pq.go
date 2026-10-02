@@ -44,19 +44,19 @@ const (
 	emptyPriority        = math.MaxInt32
 )
 
-type MoundTree struct {
+type NCASMoundTree struct {
 	levels [maxDepth]atomic.Pointer[level]
 	depth  atomic.Uint32
 }
 
-func NewMoundTree() *MoundTree {
-	m := &MoundTree{}
+func NewMoundTree() *NCASMoundTree {
+	m := &NCASMoundTree{}
 	m.levels[0].Store(newLevel(0))
 	m.depth.Store(1)
 	return m
 }
 
-func (m *MoundTree) Insert(data CDNData) {
+func (m *NCASMoundTree) Insert(data CDNData) {
 	v := data.priority
 	node := &LNode{value: data}
 	for {
@@ -90,7 +90,7 @@ func (m *MoundTree) Insert(data CDNData) {
 	}
 }
 
-func (m *MoundTree) findInsertPoint(v uint32) uint32 {
+func (m *NCASMoundTree) findInsertPoint(v uint32) uint32 {
 	for {
 		d := m.depth.Load()
 		for range maxDepth {
@@ -112,7 +112,7 @@ func (m *MoundTree) findInsertPoint(v uint32) uint32 {
 
 var shardLevel = uint32(bits.Len(uint(runtime.GOMAXPROCS(0) - 1)))
 
-func (m *MoundTree) shardBase() (base, span uint32) {
+func (m *NCASMoundTree) shardBase() (base, span uint32) {
 	d := m.depth.Load()
 	L := shardLevel
 	if L >= d {
@@ -122,7 +122,7 @@ func (m *MoundTree) shardBase() (base, span uint32) {
 	return base, base
 }
 
-func (m *MoundTree) tryExtractMin(n uint32) (CDNData, bool) {
+func (m *NCASMoundTree) tryExtractMin(n uint32) (CDNData, bool) {
 	addr := m.nodeAt(n)
 	if addr == nil {
 		return CDNData{}, false
@@ -152,7 +152,7 @@ func (m *MoundTree) tryExtractMin(n uint32) (CDNData, bool) {
 	return retval, true
 }
 
-func (m *MoundTree) extractTwoChoice() (CDNData, bool) {
+func (m *NCASMoundTree) extractTwoChoice() (CDNData, bool) {
 	base, span := m.shardBase()
 	if span <= 1 {
 		return m.tryExtractMin(1)
@@ -177,7 +177,7 @@ func (m *MoundTree) extractTwoChoice() (CDNData, bool) {
 
 const maxExtractRetry = 3
 
-func (m *MoundTree) RelaxExtractMin() CDNData {
+func (m *NCASMoundTree) RelaxExtractMin() CDNData {
 	if addr := m.nodeAt(1); addr != nil {
 		R := CasnRead(addr)
 		if !R.value.dirty && R.value.list != nil {
@@ -196,7 +196,7 @@ func (m *MoundTree) RelaxExtractMin() CDNData {
 	return m.ExtractMin()
 }
 
-func (m *MoundTree) ExtractMin() CDNData {
+func (m *NCASMoundTree) ExtractMin() CDNData {
 	for {
 		tree := m.nodeAt(1)
 		R := CasnRead(tree)
@@ -225,7 +225,7 @@ func (m *MoundTree) ExtractMin() CDNData {
 	}
 }
 
-func (m *MoundTree) moundify(n uint32) {
+func (m *NCASMoundTree) moundify(n uint32) {
 	for {
 		addr := m.nodeAt(n)
 		if addr == nil {
@@ -335,7 +335,7 @@ func (m *MoundTree) moundify(n uint32) {
 	}
 }
 
-func (m *MoundTree) binarySearch(leaf, v uint32) uint32 {
+func (m *NCASMoundTree) binarySearch(leaf, v uint32) uint32 {
 	l, r := 0, bits.Len32(leaf)-1
 	ans := leaf
 	for l <= r {
@@ -351,7 +351,7 @@ func (m *MoundTree) binarySearch(leaf, v uint32) uint32 {
 	return ans
 }
 
-func (m *MoundTree) grow(d uint32) {
+func (m *NCASMoundTree) grow(d uint32) {
 	if d >= maxDepth {
 		return
 	}
@@ -362,7 +362,7 @@ func (m *MoundTree) grow(d uint32) {
 	m.depth.CompareAndSwap(d, d+1)
 }
 
-func (m *MoundTree) nodeAt(c uint32) *atomic.Pointer[Word[CMNode]] {
+func (m *NCASMoundTree) nodeAt(c uint32) *atomic.Pointer[Word[CMNode]] {
 	d := uint32(bits.Len32(c) - 1)
 	if d >= m.depth.Load() {
 		return nil
@@ -372,7 +372,7 @@ func (m *MoundTree) nodeAt(c uint32) *atomic.Pointer[Word[CMNode]] {
 	return &lv.slots[c-(1<<d)]
 }
 
-func (m *MoundTree) randomLeaf(d uint32) uint32 {
+func (m *NCASMoundTree) randomLeaf(d uint32) uint32 {
 	base := uint32(1) << (d - 1)
 
 	return base + rand.Uint32N(base)
