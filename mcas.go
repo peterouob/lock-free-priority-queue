@@ -1,4 +1,4 @@
-package multi_world_compare_and_swap
+package pq
 
 import (
 	"cmp"
@@ -76,6 +76,14 @@ func NewMCASDescriptor[V any](words ...WordDescriptor[V]) (*MCASDescriptor[V], e
 	return d, nil
 }
 
+func NewWord[V any](v V) *MCASWord[V] { return &MCASWord[V]{value: v} }
+
+func (w *MCASWord[V]) Value() V { return w.value }
+
+func NewWordDescriptor[V any](addr *atomic.Pointer[MCASWord[V]], old, new *MCASWord[V]) WordDescriptor[V] {
+	return WordDescriptor[V]{addr: addr, old: old, new: new}
+}
+
 func (m *MCASDescriptor[V]) readInternal(addr *atomic.Pointer[MCASWord[V]]) (*MCASWord[V], *MCASWord[V]) {
 	for {
 		val := addr.Load()
@@ -89,7 +97,7 @@ func (m *MCASDescriptor[V]) readInternal(addr *atomic.Pointer[MCASWord[V]]) (*MC
 		status := parent.status.Load()
 
 		if parent != m && status == ACTIVE {
-			m.MCAS(parent)
+			parent.MCAS()
 			continue
 		}
 
@@ -107,40 +115,38 @@ func Read[V any](addr *atomic.Pointer[MCASWord[V]]) *MCASWord[V] {
 	return v
 }
 
-func (m *MCASDescriptor[V]) MCAS(desc *MCASDescriptor[V]) bool {
+func (m *MCASDescriptor[V]) MCAS() bool {
 	success := true
-	for i := range m.words {
-		word := m.words[i]
-	retry_word:
-		content, value := m.readInternal(word.addr)
+words:
+	for i := range m.words[:m.N] {
+		word := &m.words[i]
+		for {
+			content, value := m.readInternal(word.addr)
 
-		if content == &word.selfWord {
-			continue
-		}
+			if content == &word.selfWord {
+				continue words
+			}
 
-		if value != word.old {
-			success = false
-			break
-		}
+			if value != word.old {
+				success = false
+				break words
+			}
 
-		status := desc.status.Load()
+			if m.status.Load() != ACTIVE {
+				break words
+			}
 
-		if status != ACTIVE {
-			break
-		}
-
-		if !word.addr.CompareAndSwap(content, &word.selfWord) {
-			goto retry_word
-		}
-
-		status = SUCCESSFUL
-		if !success {
-			status = FAIL
-		}
-
-		if desc.status.CompareAndSwap(ACTIVE, status) {
-			return desc.status.Load() == SUCCESSFUL
+			if word.addr.CompareAndSwap(content, &word.selfWord) {
+				continue words
+			}
 		}
 	}
-	return false
+
+	status := SUCCESSFUL
+	if !success {
+		status = FAIL
+	}
+	m.status.CompareAndSwap(ACTIVE, status)
+
+	return m.status.Load() == SUCCESSFUL
 }
