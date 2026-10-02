@@ -1,6 +1,7 @@
 package pq
 
 import (
+	"fmt"
 	"math/bits"
 	"math/rand/v2"
 	"strconv"
@@ -8,7 +9,24 @@ import (
 	"testing"
 )
 
-func buildTree(vals []int) *NCASMoundTree {
+type moundImpl struct {
+	name  string
+	new   func() MoundTree
+	build func(vals []int) MoundTree
+}
+
+var moundImpls = []moundImpl{
+	{"NCAS", func() MoundTree { return NewMoundTree() }, buildNCAS},
+	{"MCAS", func() MoundTree { return NewMCASMoundTree() }, buildMCAS},
+}
+
+func forEachMound(t *testing.T, f func(t *testing.T, impl moundImpl)) {
+	for _, impl := range moundImpls {
+		t.Run(impl.name, func(t *testing.T) { f(t, impl) })
+	}
+}
+
+func buildNCAS(vals []int) MoundTree {
 	m := &NCASMoundTree{}
 	d := uint32(bits.Len32(uint32(len(vals) - 1)))
 	for lv := range d {
@@ -23,8 +41,25 @@ func buildTree(vals []int) *NCASMoundTree {
 	return m
 }
 
+func buildMCAS(vals []int) MoundTree {
+	m := &MCASMoundTree{}
+	d := uint32(bits.Len32(uint32(len(vals) - 1)))
+	for lv := range d {
+		m.levels[lv].Store(newMCASLevel(lv))
+	}
+	m.depth.Store(d)
+	for c := 1; c < len(vals); c++ {
+		m.nodeAt(uint32(c)).Store(NewWord(CMNode{list: &LNode{value: CDNData{priority: uint32(vals[c])}}}))
+	}
+	return m
+}
+
 func TestBinarySearch(t *testing.T) {
-	m := buildTree([]int{0, 1, 3, 5, 7, 9, 11, 13})
+	forEachMound(t, testBinarySearch)
+}
+
+func testBinarySearch(t *testing.T, impl moundImpl) {
+	m := impl.build([]int{0, 1, 3, 5, 7, 9, 11, 13})
 	cases := []struct {
 		v          int
 		leaf, want uint32
@@ -41,38 +76,63 @@ func TestBinarySearch(t *testing.T) {
 	}
 }
 
-func checkMoundProperty(t *testing.T, m *NCASMoundTree) {
+func moundDepth(m MoundTree) uint32 {
+	switch m := m.(type) {
+	case *NCASMoundTree:
+		return m.depth.Load()
+	case *MCASMoundTree:
+		return m.depth.Load()
+	}
+	panic(fmt.Sprintf("unknown MoundTree %T", m))
+}
+
+func moundNode(m MoundTree, n uint32) (prio uint32, dirty, ok bool) {
+	switch m := m.(type) {
+	case *NCASMoundTree:
+		if addr := m.nodeAt(n); addr != nil {
+			w := CasnRead(addr)
+			return priority(w), w.value.dirty, true
+		}
+	case *MCASMoundTree:
+		if addr := m.nodeAt(n); addr != nil {
+			w := Read(addr)
+			return mPriority(w), w.Value().dirty, true
+		}
+	default:
+		panic(fmt.Sprintf("unknown MoundTree %T", m))
+	}
+	return 0, false, false
+}
+
+func checkMoundProperty(t *testing.T, m MoundTree) {
 	t.Helper()
-	d := m.depth.Load()
-	limit := uint32(1) << d
+	limit := uint32(1) << moundDepth(m)
 
 	for n := uint32(1); n < limit; n++ {
-		addr := m.nodeAt(n)
-		if addr == nil {
-			continue
-		}
-		N := CasnRead(addr)
-		if N.value.dirty {
+		p, dirty, ok := moundNode(m, n)
+		if !ok || dirty {
 			continue
 		}
 
 		for _, c := range []uint32{2 * n, 2*n + 1} {
-			cAddr := m.nodeAt(c)
-			if cAddr == nil {
+			cp, _, ok := moundNode(m, c)
+			if !ok {
 				continue
 			}
-			C := CasnRead(cAddr)
-			if priority(N) > priority(C) {
-				t.Errorf("violated at %d: parent=%d child=%d",
-					n, priority(N), priority(C))
+			if p > cp {
+				t.Errorf("violated at %d: parent=%d child=%d", n, p, cp)
 			}
 		}
 	}
 }
 
 func TestExtractMinOrderRandom(t *testing.T) {
+	forEachMound(t, testExtractMinOrderRandom)
+}
+
+func testExtractMinOrderRandom(t *testing.T, impl moundImpl) {
 	for trial := range 100 {
-		m := NewMoundTree()
+		m := impl.new()
 		n := 50 + rand.IntN(200)
 		vals := rand.Perm(n)
 		for i, v := range vals {
@@ -89,7 +149,11 @@ func TestExtractMinOrderRandom(t *testing.T) {
 }
 
 func TestInsertConcurrent(t *testing.T) {
-	m := NewMoundTree()
+	forEachMound(t, testInsertConcurrent)
+}
+
+func testInsertConcurrent(t *testing.T, impl moundImpl) {
+	m := impl.new()
 	var wg sync.WaitGroup
 	for i := range 8 {
 		wg.Add(1)
@@ -105,8 +169,12 @@ func TestInsertConcurrent(t *testing.T) {
 }
 
 func TestExtractMinConcurrent(t *testing.T) {
+	forEachMound(t, testExtractMinConcurrent)
+}
+
+func testExtractMinConcurrent(t *testing.T, impl moundImpl) {
 	const n = 1000
-	m := NewMoundTree()
+	m := impl.new()
 	for i := range n {
 		m.Insert(CDNData{priority: uint32(i), value: strconv.Itoa(i)})
 	}
@@ -135,11 +203,18 @@ func TestExtractMinConcurrent(t *testing.T) {
 	if len(seen) != n {
 		t.Fatalf("extracted %d distinct items, want %d", len(seen), n)
 	}
+	if d := m.ExtractMin(); d.value != "" {
+		t.Fatalf("queue not empty after drain: %+v", d)
+	}
 }
 
 func TestExtractMinMonotonic(t *testing.T) {
+	forEachMound(t, testExtractMinMonotonic)
+}
+
+func testExtractMinMonotonic(t *testing.T, impl moundImpl) {
 	const n = 1000
-	m := NewMoundTree()
+	m := impl.new()
 	for i := range n {
 		m.Insert(CDNData{priority: uint32(rand.Perm(n)[i]), value: strconv.Itoa(i)})
 	}
@@ -155,8 +230,12 @@ func TestExtractMinMonotonic(t *testing.T) {
 }
 
 func TestStressMixed(t *testing.T) {
+	forEachMound(t, testStressMixed)
+}
+
+func testStressMixed(t *testing.T, impl moundImpl) {
 	for trial := range 30 {
-		m := NewMoundTree()
+		m := impl.new()
 		const W, per = 8, 3000
 		var mu sync.Mutex
 		got := map[string]int{}
