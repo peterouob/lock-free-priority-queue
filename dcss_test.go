@@ -104,3 +104,69 @@ func TestCasnAllOrNothing(t *testing.T) {
 		assert.Equal(t, 2, CasnRead(b).value)
 	})
 }
+
+func TestMCASManyWords(t *testing.T) {
+	slots := make([]atomic.Pointer[MCASWord[int]], 4)
+	olds := make([]*MCASWord[int], len(slots))
+	for i := range slots {
+		olds[i] = NewWord(i)
+		slots[i].Store(olds[i])
+	}
+
+	build := func(bad int) []WordDescriptor[int] {
+		var ws []WordDescriptor[int]
+		for i := len(slots) - 1; i >= 0; i-- {
+			old := olds[i]
+			if i == bad {
+				old = NewWord(-1)
+			}
+			ws = append(ws, NewWordDescriptor(&slots[i], old, NewWord(i+10)))
+		}
+		return ws
+	}
+
+	d, err := NewMCASDescriptor(build(2)...)
+	assert.NoError(t, err)
+	assert.False(t, d.MCAS(), "stale old must fail")
+	for i := range slots {
+		assert.Equal(t, i, Read(&slots[i]).Value(), "failed MCAS changed slot %d", i)
+	}
+
+	d, err = NewMCASDescriptor(build(-1)...)
+	assert.NoError(t, err)
+	assert.True(t, d.MCAS())
+	for i := range slots {
+		assert.Equal(t, i+10, Read(&slots[i]).Value())
+	}
+}
+
+func TestCasnManyWords(t *testing.T) {
+	slots := make([]atomic.Pointer[Word[int]], 4)
+	olds := make([]*Word[int], len(slots))
+	for i := range slots {
+		olds[i] = newWord(i)
+		slots[i].Store(olds[i])
+	}
+
+	build := func(bad int) []CasnEntry[int] {
+		var es []CasnEntry[int]
+		for i := range slots {
+			old := olds[i]
+			if i == bad {
+				old = newWord(-1)
+			}
+			es = append(es, NewCasnEntry(&slots[i], old, newWord(i+10)))
+		}
+		return es
+	}
+
+	assert.False(t, NewCasnDescriptor(build(2)...).Casn(), "stale old must fail")
+	for i := range slots {
+		assert.Equal(t, i, CasnRead(&slots[i]).value, "failed CASN changed slot %d", i)
+	}
+
+	assert.True(t, NewCasnDescriptor(build(-1)...).Casn())
+	for i := range slots {
+		assert.Equal(t, i+10, CasnRead(&slots[i]).value)
+	}
+}

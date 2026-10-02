@@ -1,6 +1,8 @@
 package pq
 
 import (
+	"cmp"
+	"slices"
 	"sync/atomic"
 	"unsafe"
 )
@@ -135,26 +137,42 @@ func NewCasnEntry[V any](addr *atomic.Pointer[Word[V]], old, new *Word[V]) CasnE
 	return CasnEntry[V]{addr: addr, old: old, new: new}
 }
 
-type CasnDescriptor[V any] struct {
-	status  atomic.Pointer[Word[int32]]
-	entries [2]CasnEntry[V]
-
-	selfWord Word[V]
-	dcss     [2]DcssDescriptor[int32, V]
+type casnSlot[V any] struct {
+	dcss DcssDescriptor[int32, V]
+	new  *Word[V]
 }
 
-func NewCasnDescriptor[V any](e1, e2 CasnEntry[V]) *CasnDescriptor[V] {
+type CasnDescriptor[V any] struct {
+	status   atomic.Pointer[Word[int32]]
+	selfWord Word[V]
+	slots    []casnSlot[V]
+	inlines  [2]casnSlot[V]
+}
 
-	if uintptr(unsafe.Pointer(e2.addr)) > uintptr(unsafe.Pointer(e1.addr)) {
-		e2, e1 = e1, e2
+func NewCasnDescriptor[V any](entries ...CasnEntry[V]) *CasnDescriptor[V] {
+	switch {
+	case len(entries) == 2:
+		if uintptr(unsafe.Pointer(entries[1].addr)) > uintptr(unsafe.Pointer(entries[0].addr)) {
+			entries[0], entries[1] = entries[1], entries[0]
+		}
+	case len(entries) > 2:
+		slices.SortFunc(entries, func(a, b CasnEntry[V]) int {
+			return cmp.Compare(uintptr(unsafe.Pointer(b.addr)), uintptr(unsafe.Pointer(a.addr)))
+		})
 	}
 
-	c := &CasnDescriptor[V]{entries: [2]CasnEntry[V]{e1, e2}}
+	c := &CasnDescriptor[V]{}
+	if len(entries) <= cap(c.inlines) {
+		c.slots = c.inlines[:len(entries)]
+	} else {
+		c.slots = make([]casnSlot[V], len(entries))
+	}
 	c.status.Store(CasnUndecided)
 	c.selfWord.desc = c
 
-	for i := range c.entries {
-		c.dcss[i].init(&c.status, CasnUndecided, c.entries[i].addr, c.entries[i].old, &c.selfWord)
+	for i, e := range entries {
+		c.slots[i].dcss.init(&c.status, CasnUndecided, e.addr, e.old, &c.selfWord)
+		c.slots[i].new = e.new
 	}
 
 	return c
@@ -168,13 +186,12 @@ func (cd *CasnDescriptor[V]) Casn() bool {
 	if cd.status.Load() == CasnUndecided {
 		status := CasnSucceeded
 
-		for i := 0; i < len(cd.entries) && status == CasnSucceeded; i++ {
-			e := cd.entries[i]
-			d := &cd.dcss[i]
+		for i := 0; i < len(cd.slots) && status == CasnSucceeded; i++ {
+			d := &cd.slots[i].dcss
 
 		retry:
 			switch val := d.Dcss(); val {
-			case e.old:
+			case d.o2:
 			case self:
 			default:
 				if other, ok := val.desc.(*CasnDescriptor[V]); ok && other != cd {
@@ -188,12 +205,13 @@ func (cd *CasnDescriptor[V]) Casn() bool {
 	}
 
 	succeeded := cd.status.Load() == CasnSucceeded
-	for _, e := range cd.entries {
+	for i := range cd.slots {
+		d := &cd.slots[i].dcss
 		if succeeded {
-			e.addr.CompareAndSwap(self, e.new)
+			d.a2.CompareAndSwap(self, cd.slots[i].new)
 			continue
 		}
-		e.addr.CompareAndSwap(self, e.old)
+		d.a2.CompareAndSwap(self, d.o2)
 	}
 
 	return succeeded

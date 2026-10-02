@@ -10,9 +10,9 @@ import (
 
 // MCASDescriptor ref: https://arxiv.org/pdf/2008.02527
 type MCASDescriptor[V any] struct {
-	status atomic.Int32
-	N      int
-	words  [2]WordDescriptor[V]
+	status  atomic.Int32
+	words   []WordDescriptor[V]
+	inlines [2]WordDescriptor[V]
 }
 
 type MCASWord[V any] struct {
@@ -37,26 +37,39 @@ const (
 )
 
 var (
-	ErrNumOfWords      = errors.New("multi_world_compare_and_swap: too many words")
+	ErrNumOfWords      = errors.New("multi_world_compare_and_swap: no words")
 	ErrNilAddress      = errors.New("multi_world_compare_and_swap: nil address")
 	ErrMustBeValueWord = errors.New("multi_world_compare_and_swap: new must be a value word")
 	ErrDuplicateAddr   = errors.New("multi_world_compare_and_swap: duplicate address")
 )
 
 func NewMCASDescriptor[V any](words ...WordDescriptor[V]) (*MCASDescriptor[V], error) {
-	d := &MCASDescriptor[V]{N: len(words)}
-
-	if len(words) == 0 || len(words) > len(d.words) {
+	if len(words) == 0 {
 		return nil, ErrNumOfWords
 	}
 
-	copy(d.words[:], words)
+	d := &MCASDescriptor[V]{}
 
-	ws := d.words[:d.N]
+	if len(words) <= cap(d.inlines) {
+		d.words = d.inlines[:len(words)]
+	} else {
+		d.words = make([]WordDescriptor[V], len(words))
+	}
 
-	slices.SortFunc(ws, func(a, b WordDescriptor[V]) int {
-		return cmp.Compare(uintptr(unsafe.Pointer(a.addr)), uintptr(unsafe.Pointer(b.addr)))
-	})
+	copy(d.words, words)
+
+	ws := d.words
+
+	switch {
+	case len(ws) == 2:
+		if uintptr(unsafe.Pointer(ws[0].addr)) > uintptr(unsafe.Pointer(ws[1].addr)) {
+			ws[0], ws[1] = ws[1], ws[0]
+		}
+	case len(ws) > 2:
+		slices.SortFunc(ws, func(a, b WordDescriptor[V]) int {
+			return cmp.Compare(uintptr(unsafe.Pointer(a.addr)), uintptr(unsafe.Pointer(b.addr)))
+		})
+	}
 
 	for i := range ws {
 		w := &ws[i]
@@ -118,7 +131,7 @@ func Read[V any](addr *atomic.Pointer[MCASWord[V]]) *MCASWord[V] {
 func (m *MCASDescriptor[V]) MCAS() bool {
 	success := true
 words:
-	for i := range m.words[:m.N] {
+	for i := range m.words {
 		word := &m.words[i]
 		for {
 			content, value := m.readInternal(word.addr)
