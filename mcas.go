@@ -10,9 +10,9 @@ import (
 
 // MCASDescriptor ref: https://arxiv.org/pdf/2008.02527
 type MCASDescriptor[V any] struct {
-	status  atomic.Int32
-	words   []WordDescriptor[V]
 	inlines [2]WordDescriptor[V]
+	words   []WordDescriptor[V]
+	status  atomic.Int32
 }
 
 type MCASWord[V any] struct {

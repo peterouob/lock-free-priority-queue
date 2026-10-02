@@ -10,14 +10,14 @@ import (
 )
 
 type moundImpl struct {
-	name  string
 	new   func() MoundTree
 	build func(vals []int) MoundTree
+	name  string
 }
 
 var moundImpls = []moundImpl{
-	{"NCAS", func() MoundTree { return NewMoundTree() }, buildNCAS},
-	{"MCAS", func() MoundTree { return NewMCASMoundTree() }, buildMCAS},
+	{name: "NCAS", new: func() MoundTree { return NewMoundTree() }, build: buildNCAS},
+	{name: "MCAS", new: func() MoundTree { return NewMCASMoundTree() }, build: buildMCAS},
 }
 
 func forEachMound(t *testing.T, f func(t *testing.T, impl moundImpl)) {

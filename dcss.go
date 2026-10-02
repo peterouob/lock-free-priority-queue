@@ -138,15 +138,15 @@ func NewCasnEntry[V any](addr *atomic.Pointer[Word[V]], old, new *Word[V]) CasnE
 }
 
 type casnSlot[V any] struct {
-	dcss DcssDescriptor[int32, V]
 	new  *Word[V]
+	dcss DcssDescriptor[int32, V]
 }
 
 type CasnDescriptor[V any] struct {
-	status   atomic.Pointer[Word[int32]]
-	selfWord Word[V]
-	slots    []casnSlot[V]
 	inlines  [2]casnSlot[V]
+	selfWord Word[V]
+	status   atomic.Pointer[Word[int32]]
+	slots    []casnSlot[V]
 }
 
 func NewCasnDescriptor[V any](entries ...CasnEntry[V]) *CasnDescriptor[V] {

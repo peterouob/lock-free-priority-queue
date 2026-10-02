@@ -15,8 +15,8 @@ type CDNData struct {
 }
 
 type LNode struct {
-	value CDNData
 	next  *LNode
+	value CDNData
 }
 
 type CMNode struct {

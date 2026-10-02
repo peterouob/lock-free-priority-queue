@@ -24,8 +24,8 @@ func (h *lockHeap) Pop() any {
 }
 
 type LockPQ struct {
-	mu sync.Mutex
 	h  lockHeap
+	mu sync.Mutex
 }
 
 func (q *LockPQ) RelaxExtractMin() CDNData {

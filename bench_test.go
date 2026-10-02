@@ -20,8 +20,8 @@ type priorityQueue interface {
 }
 
 type queueFactory struct {
-	name string
 	make func(capacity int) priorityQueue
+	name string
 }
 
 var queueFactories = []queueFactory{
